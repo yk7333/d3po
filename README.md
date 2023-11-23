@@ -7,8 +7,8 @@ The official code for the paper [Using Human Feedback to Fine-tune Diffusion Mod
 # 1. Requirements
 Python 3.10 or a newer version is required to install the necessary dependencies.
 ```
-git clone https://github.com/yk7333/D3PO.git
-cd D3PO
+git clone https://github.com/yk7333/d3po.git
+cd d3po
 pip install -e .
 ```
 

@@ -373,7 +373,7 @@ def main(_):
         rewards = accelerator.gather(samples["rewards"]).cpu().numpy()
         #record the better images' reward based on the reward model.
         accelerator.log(
-            {"reward": rewards, "epoch": epoch, "reward_mean": rewards.max(axis=0).mean(), "reward_std": rewards.max(axis=0).std()},
+            {"epoch": epoch, "reward_mean": rewards.max(axis=0).mean(), "reward_std": rewards.max(axis=0).std()},
             step=global_step,
         )
         # this is a hack to force wandb to log the images as JPEGs instead of PNGs

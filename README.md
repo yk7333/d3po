@@ -39,6 +39,6 @@ After organizing human feedback results into a JSON file, you'll need to modify 
 ```
 accelerate launch scripts/train.py
 ```
-The model will be fine-tuned during training based on human feedback, aiming to achieve the desired results. We conducted experiments to reduce image distortions, enhance image security, and perform prompt-image alignment. You can customize additional fine-tuning tasks based on your specific needs.
+The model will be fine-tuned during training based on human feedback, aiming to achieve the desired results. We conducted experiments to reduce image distortions, enhance image security, and perform prompt-image alignment. You can customize additional fine-tuning tasks based on your specific needs. The dataset for the image distortion experiments can be downloaded [here](https://huggingface.co/datasets/yangkaiSIGS/d3po_datasets/tree/main).
 
 ![D3PO](figures/anything.png)

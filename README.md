@@ -42,3 +42,13 @@ accelerate launch scripts/train.py
 The model will be fine-tuned during training based on human feedback, aiming to achieve the desired results. We conducted experiments to reduce image distortions, enhance image security, and perform prompt-image alignment. You can customize additional fine-tuning tasks based on your specific needs. The dataset for the image distortion experiments can be downloaded [here](https://huggingface.co/datasets/yangkaiSIGS/d3po_datasets/tree/main).
 
 ![D3PO](figures/anything.png)
+
+# Citation
+```
+@article{yang2023using,
+  title={Using Human Feedback to Fine-tune Diffusion Models without Any Reward Model},
+  author={Yang, Kai and Tao, Jian and Lyu, Jiafei and Ge, Chunjiang and Chen, Jiaxin and Li, Qimai and Shen, Weihan and Zhu, Xiaolong and Li, Xiu},
+  journal={arXiv preprint arXiv:2311.13231},
+  year={2023}
+}
+```

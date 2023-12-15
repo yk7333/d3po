@@ -2,6 +2,9 @@ import contextlib
 import os
 import copy
 import datetime
+import sys
+script_path = os.path.abspath(__file__)
+sys.path.append(os.path.dirname(os.path.dirname(script_path)))
 from concurrent import futures
 from absl import app, flags
 from ml_collections import config_flags
@@ -82,7 +85,7 @@ def main(_):
     set_seed(ramdom_seed, device_specific=True)
 
     # load scheduler, tokenizer and models.
-    pipeline = StableDiffusionPipeline.from_pretrained("stablediffusionapi/anything-v5", torch_dtype=torch.float16)
+    pipeline = StableDiffusionPipeline.from_pretrained(config.pretrained.model, torch_dtype=torch.float16)
     # freeze parameters of models to save more memory
     pipeline.vae.requires_grad_(False)
     pipeline.text_encoder.requires_grad_(False)
@@ -155,7 +158,7 @@ def main(_):
         if config.use_lora and isinstance(models[0], AttnProcsLayers):
             # pipeline.unet.load_attn_procs(input_dir)
             tmp_unet = UNet2DConditionModel.from_pretrained(
-                "stablediffusionapi/anything-v5", revision=config.pretrained.revision, subfolder="unet"
+                config.pretrained.model, revision=config.pretrained.revision, subfolder="unet"
             )
             tmp_unet.load_attn_procs(input_dir)
             models[0].load_state_dict(AttnProcsLayers(tmp_unet.attn_processors).state_dict())
@@ -260,163 +263,161 @@ def main(_):
     pipeline.scheduler.timesteps = samples['timesteps']
     pipeline.scheduler.set_timesteps(config.sample.num_steps, device=accelerator.device)
     combinations_list = list(combinations(range(7), 2))
+    num_timesteps = samples["timesteps"].shape[1]
+    total_batch_size = human_prefer.shape[0]
+    assert num_timesteps == config.sample.num_steps
+    init_samples = copy.deepcopy(samples)
     for epoch in range(config.num_epochs):
-        num_timesteps = samples["timesteps"].shape[1]
-        total_batch_size = human_prefer.shape[0]
-        assert num_timesteps == config.sample.num_steps
-        init_samples = copy.deepcopy(samples)
-        #################### TRAINING ####################
-        for inner_epoch in range(config.train.num_inner_epochs):
-            # shuffle samples along batch dimension
-            perm = torch.randperm(total_batch_size)
-            samples = {k: v[perm] for k, v in init_samples.items()}
+        # shuffle samples along batch dimension
+        perm = torch.randperm(total_batch_size)
+        samples = {k: v[perm] for k, v in init_samples.items()}
 
-            # shuffle along time dimension independently for each sample
-            perms = torch.stack(
-                [torch.randperm(num_timesteps) for _ in range(total_batch_size)]
-            )
-            for key in ["latents", "next_latents"]:
-                tmp = samples[key].permute(0,2,3,4,5,1)[torch.arange(total_batch_size)[:, None], perms]
-                samples[key] = tmp.permute(0,5,1,2,3,4)
-                del tmp
-            samples["timesteps"] = samples["timesteps"][torch.arange(total_batch_size)[:, None], perms].unsqueeze(1).repeat(1,7,1)
-            # training
-            pipeline.unet.train()
-            for i in tqdm(range(0,total_batch_size,config.train.batch_size),
-                        desc="Update",
-                        position=2,
-                        leave=False, 
-                          ):
-                if ((i+1) // config.train.batch_size)% config.train.save_interval==0:
-                    accelerator.save_state()
-                for each_combination in combinations_list:
-                    sample_0 = tree.map_structure(lambda value: value[i:i+config.train.batch_size, each_combination[0]].to(accelerator.device), samples)
-                    sample_1 = tree.map_structure(lambda value: value[i:i+config.train.batch_size, each_combination[1]].to(accelerator.device), samples)
-                    if torch.all(sample_0['human_prefer'] == sample_1['human_prefer']): 
-                        continue
-                    # compute which image is better
-                    compare_sample0 = (sample_0['human_prefer'] > sample_1['human_prefer']).int() * 2 - 1
-                    compare_sample1 = (sample_1['human_prefer'] > sample_0['human_prefer']).int() * 2 - 1
-                    equal_mask = sample_0['human_prefer'] == sample_1['human_prefer']
-                    compare_sample0[equal_mask] = 0
-                    compare_sample1[equal_mask] = 0
-                    human_prefer = torch.stack([compare_sample0, compare_sample1], dim=1)
+        # shuffle along time dimension independently for each sample
+        perms = torch.stack(
+            [torch.randperm(num_timesteps) for _ in range(total_batch_size)]
+        )
+        for key in ["latents", "next_latents"]:
+            tmp = samples[key].permute(0,2,3,4,5,1)[torch.arange(total_batch_size)[:, None], perms]
+            samples[key] = tmp.permute(0,5,1,2,3,4)
+            del tmp
+        samples["timesteps"] = samples["timesteps"][torch.arange(total_batch_size)[:, None], perms].unsqueeze(1).repeat(1,7,1)
+        # training
+        pipeline.unet.train()
+        for i in tqdm(range(0,total_batch_size,config.train.batch_size),
+                    desc="Update",
+                    position=2,
+                    leave=False, 
+                        ):
+            if ((i+1) // config.train.batch_size)% config.train.save_interval==0:
+                accelerator.save_state()
+            for each_combination in combinations_list:
+                sample_0 = tree.map_structure(lambda value: value[i:i+config.train.batch_size, each_combination[0]].to(accelerator.device), samples)
+                sample_1 = tree.map_structure(lambda value: value[i:i+config.train.batch_size, each_combination[1]].to(accelerator.device), samples)
+                if torch.all(sample_0['human_prefer'] == sample_1['human_prefer']): 
+                    continue
+                # compute which image is better
+                compare_sample0 = (sample_0['human_prefer'] > sample_1['human_prefer']).int() * 2 - 1
+                compare_sample1 = (sample_1['human_prefer'] > sample_0['human_prefer']).int() * 2 - 1
+                equal_mask = sample_0['human_prefer'] == sample_1['human_prefer']
+                compare_sample0[equal_mask] = 0
+                compare_sample1[equal_mask] = 0
+                human_prefer = torch.stack([compare_sample0, compare_sample1], dim=1)
 
-                    
-                    if config.train.cfg:
-                        # concat negative prompts to sample prompts to avoid two forward passes
-                        embeds_0 = torch.cat([train_neg_prompt_embeds, sample_0["prompt_embeds"]])
-                        embeds_1 = torch.cat([train_neg_prompt_embeds, sample_1["prompt_embeds"]])
-                    else:
-                        embeds_0 = sample_0["prompt_embeds"]
-                        embeds_1 = sample_1["prompt_embeds"]
-                    for j in tqdm(
-                        range(num_train_timesteps),
-                        desc="Timestep",
-                        position=3,
-                        leave=False,
-                        disable=not accelerator.is_local_main_process,
-                    ):  
-                        with accelerator.accumulate(pipeline.unet):
-                            with autocast():
-                                if config.train.cfg:
-                                    noise_pred_0 = pipeline.unet(
-                                        torch.cat([sample_0["latents"][:, j]] * 2),
-                                        torch.cat([sample_0["timesteps"][:, j]] * 2),
-                                        embeds_0,
-                                    ).sample
-                                    noise_pred_uncond_0, noise_pred_text_0 = noise_pred_0.chunk(2)
-                                    noise_pred_0 = noise_pred_uncond_0 + config.sample.guidance_scale * (noise_pred_text_0 - noise_pred_uncond_0)
+                
+                if config.train.cfg:
+                    # concat negative prompts to sample prompts to avoid two forward passes
+                    embeds_0 = torch.cat([train_neg_prompt_embeds, sample_0["prompt_embeds"]])
+                    embeds_1 = torch.cat([train_neg_prompt_embeds, sample_1["prompt_embeds"]])
+                else:
+                    embeds_0 = sample_0["prompt_embeds"]
+                    embeds_1 = sample_1["prompt_embeds"]
+                for j in tqdm(
+                    range(num_train_timesteps),
+                    desc="Timestep",
+                    position=3,
+                    leave=False,
+                    disable=not accelerator.is_local_main_process,
+                ):  
+                    with accelerator.accumulate(pipeline.unet):
+                        with autocast():
+                            if config.train.cfg:
+                                noise_pred_0 = pipeline.unet(
+                                    torch.cat([sample_0["latents"][:, j]] * 2),
+                                    torch.cat([sample_0["timesteps"][:, j]] * 2),
+                                    embeds_0,
+                                ).sample
+                                noise_pred_uncond_0, noise_pred_text_0 = noise_pred_0.chunk(2)
+                                noise_pred_0 = noise_pred_uncond_0 + config.sample.guidance_scale * (noise_pred_text_0 - noise_pred_uncond_0)
 
-                                    noise_ref_pred_0 = ref(
-                                        torch.cat([sample_0["latents"][:, j]] * 2),
-                                        torch.cat([sample_0["timesteps"][:, j]] * 2),
-                                        embeds_0,
-                                    ).sample
-                                    noise_ref_pred_uncond_0, noise_ref_pred_text_0 = noise_ref_pred_0.chunk(2)
-                                    noise_ref_pred_0 = noise_ref_pred_uncond_0 + config.sample.guidance_scale * (
-                                        noise_ref_pred_text_0 - noise_ref_pred_uncond_0
-                                    )
-
-                                    noise_pred_1 = pipeline.unet(
-                                        torch.cat([sample_1["latents"][:, j]] * 2),
-                                        torch.cat([sample_1["timesteps"][:, j]] * 2),
-                                        embeds_1,
-                                    ).sample
-                                    noise_pred_uncond_1, noise_pred_text_1 = noise_pred_1.chunk(2)
-                                    noise_pred_1 = noise_pred_uncond_1 + config.sample.guidance_scale * (noise_pred_text_1 - noise_pred_uncond_1)
-
-                                    noise_ref_pred_1 = ref(
-                                        torch.cat([sample_1["latents"][:, j]] * 2),
-                                        torch.cat([sample_1["timesteps"][:, j]] * 2),
-                                        embeds_1,
-                                    ).sample
-                                    noise_ref_pred_uncond_1, noise_ref_pred_text_1 = noise_ref_pred_1.chunk(2)
-                                    noise_ref_pred_1 = noise_ref_pred_uncond_1 + config.sample.guidance_scale * (
-                                        noise_ref_pred_text_1 - noise_ref_pred_uncond_1
-                                    )
-
-                                else:
-                                    noise_pred_0 = pipeline.unet(
-                                        sample_0["latents"][:, j], sample_0["timesteps"][:, j], embeds_0
-                                    ).sample
-                                    noise_ref_pred_0 = ref(
-                                        sample_0["latents"][:, j], sample_0["timesteps"][:, j], embeds_0
-                                    ).sample
-
-                                    noise_pred_1 = pipeline.unet(
-                                        sample_1["latents"][:, j], sample_1["timesteps"][:, j], embeds_1
-                                    ).sample
-                                    noise_ref_pred_1 = ref(
-                                        sample_1["latents"][:, j], sample_1["timesteps"][:, j], embeds_1
-                                    ).sample
-
-
-
-                                # compute the log prob of next_latents given latents under the current model
-                                _, total_prob_0 = ddim_step_with_logprob(
-                                    pipeline.scheduler,
-                                    noise_pred_0,
-                                    sample_0["timesteps"][:, j],
-                                    sample_0["latents"][:, j],
-                                    eta=config.sample.eta,
-                                    prev_sample=sample_0["next_latents"][:, j],
+                                noise_ref_pred_0 = ref(
+                                    torch.cat([sample_0["latents"][:, j]] * 2),
+                                    torch.cat([sample_0["timesteps"][:, j]] * 2),
+                                    embeds_0,
+                                ).sample
+                                noise_ref_pred_uncond_0, noise_ref_pred_text_0 = noise_ref_pred_0.chunk(2)
+                                noise_ref_pred_0 = noise_ref_pred_uncond_0 + config.sample.guidance_scale * (
+                                    noise_ref_pred_text_0 - noise_ref_pred_uncond_0
                                 )
-                                _, total_ref_prob_0 = ddim_step_with_logprob(
-                                    pipeline.scheduler,
-                                    noise_ref_pred_0,
-                                    sample_0["timesteps"][:, j],
-                                    sample_0["latents"][:, j],
-                                    eta=config.sample.eta,
-                                    prev_sample=sample_0["next_latents"][:, j],
-                                )
-                                _, total_prob_1 = ddim_step_with_logprob(
-                                    pipeline.scheduler,
-                                    noise_pred_1,
-                                    sample_1["timesteps"][:, j],
-                                    sample_1["latents"][:, j],
-                                    eta=config.sample.eta,
-                                    prev_sample=sample_1["next_latents"][:, j],
-                                )
-                                _, total_ref_prob_1 = ddim_step_with_logprob(
-                                    pipeline.scheduler,
-                                    noise_ref_pred_1,
-                                    sample_1["timesteps"][:, j],
-                                    sample_1["latents"][:, j],
-                                    eta=config.sample.eta,
-                                    prev_sample=sample_1["next_latents"][:, j],
-                                )
-                        # clip the probs of the pre-trained model and this model
-                        ratio_0 = torch.clamp(torch.exp(total_prob_0-total_ref_prob_0),0.8,1.2)
-                        ratio_1 = torch.clamp(torch.exp(total_prob_1-total_ref_prob_1),0.8,1.2)
-                        loss = -torch.log(torch.sigmoid(config.train.beta*(torch.log(ratio_0))*human_prefer[:,0] + config.train.beta*(torch.log(ratio_1))*human_prefer[:, 1])).mean()
 
-                        # backward pass
-                        accelerator.backward(loss)
-                        if accelerator.sync_gradients:
-                            accelerator.clip_grad_norm_(trainable_layers.parameters(), config.train.max_grad_norm)
-                        optimizer.step()
-                        optimizer.zero_grad()
+                                noise_pred_1 = pipeline.unet(
+                                    torch.cat([sample_1["latents"][:, j]] * 2),
+                                    torch.cat([sample_1["timesteps"][:, j]] * 2),
+                                    embeds_1,
+                                ).sample
+                                noise_pred_uncond_1, noise_pred_text_1 = noise_pred_1.chunk(2)
+                                noise_pred_1 = noise_pred_uncond_1 + config.sample.guidance_scale * (noise_pred_text_1 - noise_pred_uncond_1)
+
+                                noise_ref_pred_1 = ref(
+                                    torch.cat([sample_1["latents"][:, j]] * 2),
+                                    torch.cat([sample_1["timesteps"][:, j]] * 2),
+                                    embeds_1,
+                                ).sample
+                                noise_ref_pred_uncond_1, noise_ref_pred_text_1 = noise_ref_pred_1.chunk(2)
+                                noise_ref_pred_1 = noise_ref_pred_uncond_1 + config.sample.guidance_scale * (
+                                    noise_ref_pred_text_1 - noise_ref_pred_uncond_1
+                                )
+
+                            else:
+                                noise_pred_0 = pipeline.unet(
+                                    sample_0["latents"][:, j], sample_0["timesteps"][:, j], embeds_0
+                                ).sample
+                                noise_ref_pred_0 = ref(
+                                    sample_0["latents"][:, j], sample_0["timesteps"][:, j], embeds_0
+                                ).sample
+
+                                noise_pred_1 = pipeline.unet(
+                                    sample_1["latents"][:, j], sample_1["timesteps"][:, j], embeds_1
+                                ).sample
+                                noise_ref_pred_1 = ref(
+                                    sample_1["latents"][:, j], sample_1["timesteps"][:, j], embeds_1
+                                ).sample
+
+
+
+                            # compute the log prob of next_latents given latents under the current model
+                            _, total_prob_0 = ddim_step_with_logprob(
+                                pipeline.scheduler,
+                                noise_pred_0,
+                                sample_0["timesteps"][:, j],
+                                sample_0["latents"][:, j],
+                                eta=config.sample.eta,
+                                prev_sample=sample_0["next_latents"][:, j],
+                            )
+                            _, total_ref_prob_0 = ddim_step_with_logprob(
+                                pipeline.scheduler,
+                                noise_ref_pred_0,
+                                sample_0["timesteps"][:, j],
+                                sample_0["latents"][:, j],
+                                eta=config.sample.eta,
+                                prev_sample=sample_0["next_latents"][:, j],
+                            )
+                            _, total_prob_1 = ddim_step_with_logprob(
+                                pipeline.scheduler,
+                                noise_pred_1,
+                                sample_1["timesteps"][:, j],
+                                sample_1["latents"][:, j],
+                                eta=config.sample.eta,
+                                prev_sample=sample_1["next_latents"][:, j],
+                            )
+                            _, total_ref_prob_1 = ddim_step_with_logprob(
+                                pipeline.scheduler,
+                                noise_ref_pred_1,
+                                sample_1["timesteps"][:, j],
+                                sample_1["latents"][:, j],
+                                eta=config.sample.eta,
+                                prev_sample=sample_1["next_latents"][:, j],
+                            )
+                    # clip the probs of the pre-trained model and this model
+                    ratio_0 = torch.clamp(torch.exp(total_prob_0-total_ref_prob_0),1 - config.train.eps, 1 + config.train.eps)
+                    ratio_1 = torch.clamp(torch.exp(total_prob_1-total_ref_prob_1),1 - config.train.eps, 1 + config.train.eps)
+                    loss = -torch.log(torch.sigmoid(config.train.beta*(torch.log(ratio_0))*human_prefer[:,0] + config.train.beta*(torch.log(ratio_1))*human_prefer[:, 1])).mean()
+
+                    # backward pass
+                    accelerator.backward(loss)
+                    if accelerator.sync_gradients:
+                        accelerator.clip_grad_norm_(trainable_layers.parameters(), config.train.max_grad_norm)
+                    optimizer.step()
+                    optimizer.zero_grad()
 
 
 

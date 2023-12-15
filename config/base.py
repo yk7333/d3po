@@ -64,7 +64,7 @@ def get_config():
     # whether to use the 8bit Adam optimizer from bitsandbytes.
     train.use_8bit_adam = False
     # learning rate.
-    train.learning_rate = 1e-5
+    train.learning_rate = 3e-5
     # Adam beta1.
     train.adam_beta1 = 0.9
     # Adam beta2.
@@ -91,6 +91,8 @@ def get_config():
     train.timestep_fraction = 1.0
     # coefficient of the KL divergence
     train.beta = 0.1
+    # The coefficient constraining the probability ratio. Equivalent to restricting the Q-values within a certain range.
+    train.eps = 0.1
     # save_interval
     train.save_interval = 50
     # sample path

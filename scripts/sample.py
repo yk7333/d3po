@@ -2,6 +2,9 @@ import contextlib
 import os
 import datetime
 import time
+import sys
+script_path = os.path.abspath(__file__)
+sys.path.append(os.path.dirname(os.path.dirname(script_path)))
 from absl import app, flags
 from ml_collections import config_flags
 from accelerate import Accelerator
@@ -83,7 +86,7 @@ def main(_):
     set_seed(ramdom_seed, device_specific=True)
 
     # load scheduler, tokenizer and models.
-    pipeline = StableDiffusionPipeline.from_pretrained("stablediffusionapi/anything-v5", torch_dtype=torch.float16)
+    pipeline = StableDiffusionPipeline.from_pretrained(config.pretrained.model, torch_dtype=torch.float16)
     # freeze parameters of models to save more memory
     pipeline.vae.requires_grad_(False)
     pipeline.text_encoder.requires_grad_(False)

@@ -5,6 +5,9 @@ import copy
 import datetime
 from concurrent import futures
 import time
+import sys
+script_path = os.path.abspath(__file__)
+sys.path.append(os.path.dirname(os.path.dirname(script_path)))
 from absl import app, flags
 from ml_collections import config_flags
 from accelerate import Accelerator
@@ -82,7 +85,7 @@ def main(_):
     set_seed(ramdom_seed, device_specific=True)
 
     # load scheduler, tokenizer and models.
-    pipeline = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16)
+    pipeline = StableDiffusionPipeline.from_pretrained(config.pretrained.model, torch_dtype=torch.float16)
     # freeze parameters of models to save more memory
     pipeline.vae.requires_grad_(False)
     pipeline.text_encoder.requires_grad_(False)
@@ -170,6 +173,9 @@ def main(_):
             raise ValueError(f"Unknown model type {type(models[0])}")
         models.pop()  # ensures that accelerate doesn't try to handle loading of the model
 
+    # Support multi-dimensional comparison. Default demension is 1. You can add many rewards instead of only one to judge the preference of images.
+    # For example: A: clipscore-30 blipscore-10 LAION aesthetic score-6.0 ; B: 20, 8, 5.0  then A is prefered than B
+    # if C: 40, 4, 4.0 since C[0] = 40 > A[0] and C[1] < A[1], we do not think C is prefered than A or A is prefered than C 
     def compare(a, b):
         assert isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor)
         if len(a.shape)==1:
@@ -537,8 +543,8 @@ def main(_):
                             )
                     human_prefer = compare(sample_0['rewards'],sample_1['rewards'])
                     # clip the Q value
-                    ratio_0 = torch.clamp(torch.exp(total_prob_0-total_ref_prob_0),0.8,1.2)
-                    ratio_1 = torch.clamp(torch.exp(total_prob_1-total_ref_prob_1),0.8,1.2)
+                    ratio_0 = torch.clamp(torch.exp(total_prob_0-total_ref_prob_0),1 - config.train.eps, 1 + config.train.eps)
+                    ratio_1 = torch.clamp(torch.exp(total_prob_1-total_ref_prob_1),1 - config.train.eps, 1 + config.train.eps)
                     loss = -torch.log(torch.sigmoid(config.train.beta*(torch.log(ratio_0))*human_prefer[:,0] + config.train.beta*(torch.log(ratio_1))*human_prefer[:, 1])).mean()
 
                     # backward pass

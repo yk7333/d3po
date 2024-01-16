@@ -86,10 +86,14 @@ def main(_):
 
     # load scheduler, tokenizer and models.
     pipeline = StableDiffusionPipeline.from_pretrained(config.pretrained.model, torch_dtype=torch.float16)
+    if config.use_xformers:
+        pipeline.enable_xformers_memory_efficient_attention()
     # freeze parameters of models to save more memory
     pipeline.vae.requires_grad_(False)
     pipeline.text_encoder.requires_grad_(False)
     pipeline.unet.requires_grad_(not config.use_lora)
+    if not config.use_lora and config.train.activation_checkpointing:
+        pipeline.unet.enable_gradient_checkpointing()
     # disable safety checker
     pipeline.safety_checker = None
     # make the progress bar nicer
@@ -114,9 +118,7 @@ def main(_):
     # Move unet, vae and text_encoder to device and cast to inference_dtype
     pipeline.vae.to(accelerator.device, dtype=inference_dtype)
     pipeline.text_encoder.to(accelerator.device, dtype=inference_dtype)
-    
-    if config.use_lora:
-        pipeline.unet.to(accelerator.device, dtype=inference_dtype)
+    pipeline.unet.to(accelerator.device, dtype=inference_dtype)
     ref =  copy.deepcopy(pipeline.unet)
     for param in ref.parameters():
         param.requires_grad = False

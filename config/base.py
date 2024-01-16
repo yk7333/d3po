@@ -31,6 +31,8 @@ def get_config():
     # about 10GB of GPU memory. beware that if LoRA is disabled, training will take a lot of memory and saved checkpoint
     # files will also be large.
     config.use_lora = True
+    # whether or not to use xFormers to reduce memory usage.
+    config.use_xformers = True
 
     ###### Pretrained Model ######
     config.pretrained = pretrained = ml_collections.ConfigDict()
@@ -81,6 +83,9 @@ def get_config():
     # number of inner epochs per outer epoch. each inner epoch is one iteration through the data collected during one
     # outer epoch's round of sampling.
     train.num_inner_epochs = 1
+    # enable activation checkpointing or not. 
+    # this reduces memory usage at the cost of some additional compute.
+    train.activation_checkpoint = True
     # whether or not to use classifier-free guidance during training. if enabled, the same guidance scale used during
     # sampling will be used during training.
     train.cfg = True

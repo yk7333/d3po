@@ -572,7 +572,7 @@ def main(_):
                 # make sure we did an optimization step at the end of the inner epoch
                 assert accelerator.sync_gradients
 
-            if epoch!=0 and (epoch+1) % config.save_freq == 0 and accelerator.is_main_process:
+            if epoch!=0 and (epoch+1) % config.save_freq == 0:
                 accelerator.save_state()
 
 

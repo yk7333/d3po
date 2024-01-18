@@ -387,7 +387,8 @@ def main(_):
         # this is a hack to force wandb to log the images as JPEGs instead of PNGs
         with tempfile.TemporaryDirectory() as tmpdir:
             for i, image in enumerate(images):
-                pil = Image.fromarray((image[0].cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+                image_np = image[0].to('cpu').to(torch.float32).numpy()
+                pil = Image.fromarray((image_np.transpose(1, 2, 0) * 255).astype(np.uint8))
                 pil = pil.resize((256, 256))
                 pil.save(os.path.join(tmpdir, f"{i}.jpg"))
             accelerator.log(

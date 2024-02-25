@@ -22,7 +22,7 @@ Depending on your computer's capabilities, you can choose either single or multi
 ## 2.1 Training with Reward Model (Quantifiable Objectives)
 To conduct experiments involving a reward model, you can execute the following command:
 ```
-accelerate launch scripts/train_with_rm.py
+accelerate launch scripts/rm/train_d3po.py
 ```
 You can modify the prompt function and reward function in `config/base.py` to achieve different tasks.
 

@@ -31,7 +31,6 @@ import copy
 import numpy as np
 tqdm = partial(tqdm.tqdm, dynamic_ncols=True)
 
-
 FLAGS = flags.FLAGS
 config_flags.DEFINE_config_file("config", "config/base.py", "Training configuration.")
 
@@ -80,9 +79,12 @@ def main(_):
             project_name="d3po-pytorch", config=config.to_dict(), init_kwargs={"wandb": {"name": config.run_name}}
         )
     logger.info(f"\n{config}")
-
-    ramdom_seed = np.random.randint(0,100000)
-    set_seed(ramdom_seed, device_specific=True)
+    # set seed (device_specific is very important to get different prompts on different devices)
+    np.random.seed(config.seed)
+    available_devices = accelerator.num_processes
+    random_seeds = np.random.randint(0,100000,size=available_devices)
+    device_seed = random_seeds[accelerator.process_index]
+    set_seed(device_seed, device_specific=True)
 
     # load scheduler, tokenizer and models.
     pipeline = StableDiffusionPipeline.from_pretrained(config.pretrained.model, torch_dtype=torch.float16)
@@ -359,10 +361,34 @@ def main(_):
                 rewards1 = rewards1.cpu().detach().numpy()
                 rewards2 = rewards2.cpu().detach().numpy()
                 rewards = np.c_[rewards1, rewards2]
-            
-            time.sleep(0)
-            prompts1 = list(prompts1)
-            samples.append(
+            eval_rewards = None
+            if epoch%config.sample.eval_epoch==0:
+                eval_prompts, eval_prompt_metadata = zip(
+                *[prompt_fn(**config.prompt_fn_kwargs) for _ in range(config.sample.eval_batch_size)])
+
+                # encode prompts
+                eval_prompt_ids = pipeline.tokenizer(
+                    eval_prompts,
+                    return_tensors="pt",
+                    padding="max_length",
+                    truncation=True,
+                    max_length=pipeline.tokenizer.model_max_length,
+                ).input_ids.to(accelerator.device)
+                eval_prompt_embeds = pipeline.text_encoder(eval_prompt_ids)[0]
+                eval_sample_neg_prompt_embeds = neg_prompt_embed.repeat(config.sample.eval_batch_size, 1, 1)
+                # sample
+                with autocast():
+                    eval_images, _, _, _ = pipeline_with_logprob(
+                        pipeline,
+                        prompt_embeds=eval_prompt_embeds,
+                        negative_prompt_embeds=eval_sample_neg_prompt_embeds,
+                        num_inference_steps=config.sample.num_steps,
+                        guidance_scale=config.sample.guidance_scale,
+                        eta=config.sample.eta,
+                        output_type="pt",
+                    )    
+                eval_rewards = executor.submit(reward_fn, eval_images, eval_prompts, eval_prompt_metadata).result()[0]     
+                samples.append(
                 {
                     "prompt_embeds": prompt_embeds,
                     "prompts": prompts1,
@@ -372,18 +398,41 @@ def main(_):
                     "log_probs": log_probs,
                     "images":images,
                     "rewards":torch.as_tensor(rewards, device=accelerator.device),
+                    "eval_rewards":torch.as_tensor(eval_rewards, device=accelerator.device),
                 }
-            )
+                )
+            else:
+                prompts1 = list(prompts1)
+                samples.append(
+                    {
+                        "prompt_embeds": prompt_embeds,
+                        "prompts": prompts1,
+                        "timesteps": timesteps,
+                        "latents": current_latents,  # each entry is the latent before timestep t
+                        "next_latents": next_latents,  # each entry is the latent after timestep t
+                        "log_probs": log_probs,
+                        "images":images,
+                        "rewards":torch.as_tensor(rewards, device=accelerator.device),
+                    }
+                )
         prompts = samples[0]["prompts"]
         del samples[0]["prompts"]
         samples = {k: torch.cat([s[k] for s in samples]) for k in samples[0].keys()}
         images = samples["images"]
         rewards = accelerator.gather(samples["rewards"]).cpu().numpy()
         #record the better images' reward based on the reward model.
-        accelerator.log(
-            {"epoch": epoch, "reward_mean": rewards.mean(), "reward_std": rewards.std()},
-            step=global_step,
-        )
+        if eval_rewards is not None:
+            eval_rewards = accelerator.gather(samples["eval_rewards"]).cpu().numpy()
+            accelerator.log(
+                {"eval_reward": eval_rewards, "num_samples": epoch*available_devices*config.sample.batch_size, "eval_reward_mean": eval_rewards.mean(), "eval_reward_std": eval_rewards.std()},
+                step=global_step,
+            )
+            del samples["eval_rewards"]
+        else:
+            accelerator.log(
+                {"reward": rewards, "num_samples": epoch*available_devices*config.sample.batch_size, "reward_mean": rewards.mean(), "reward_std": rewards.std()},
+                step=global_step,
+            )
         # this is a hack to force wandb to log the images as JPEGs instead of PNGs
         with tempfile.TemporaryDirectory() as tmpdir:
             for i, image in enumerate(images):

@@ -11,8 +11,7 @@ def get_config():
     config.seed = 0
     # top-level logging directory for checkpoint saving.
     config.logdir = "logs"
-    # number of epochs to train for. each epoch is one round of sampling from the model followed by training on those
-    # samples.
+    # number of epochs to train for. each epoch is one round of sampling from the model followed by training on those samples.
     config.num_epochs = 400
     # number of epochs between saving model checkpoints.
     config.save_freq = 400
@@ -136,6 +135,8 @@ def get_config():
 
     ############ Reward Function ############
     # reward function to use. see `rewards.py` for available reward functions.
+    # if the reward_fn is "jpeg_compressibility" or "jpeg_incompressibility", using the default config can reproduce our results.
+    # if the reward_fn is aesthetic score and want to reproduce our results, set config.num_epochs = 1000, sample.num_batches_per_epoch=1, sample.batch_size=8 and sample.eval_batch_size=8
     config.reward_fn = "jpeg_compressibility"
 
 

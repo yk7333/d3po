@@ -124,6 +124,9 @@ def get_config():
     # contains fewer than `min_count` values, the mean and std of the entire batch will be used instead.
     config.per_prompt_stat_tracking.min_count = 16
 
+    # DPOK: the KL coefficient
+    config.kl_ratio = 0.01
+
     ############ Prompt Function ############
     # prompt function to use. see `prompts.py` for available prompt functisons.
     config.prompt_fn = "simple_animals"

@@ -27,9 +27,9 @@ accelerate launch scripts/rm/train_d3po.py
 ![D3PO](figures/samples.png)
 You can modify the prompt function and reward function in `config/base.py` to suit various tasks. For instance, you can employ ImageReward as the reward model and apply our method to enhance human preferences for images. If you want to reproduce our experiments, you can run *train_ddpo.py* and *train_dpok.py* to get the results.
 <p align="center">
-<img src="figures/incompressity_new.jpg" width="300"/> 
-<img src="figures/compressity_new.jpg"  width="300"/>
-<img src="figures/aesthetic_new.jpg"  width="300"/>
+<img src="figures/incompressity_new.jpg" width="280"/> 
+<img src="figures/compressity_new.jpg"  width="280"/>
+<img src="figures/aesthetic_new.jpg"  width="280"/>
 </p>
 
 
